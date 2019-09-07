@@ -25,6 +25,19 @@ void BkConnection::sendRaw(BkEnvelopeType type, bool isReply, std::string msgId,
     bridge_xpc_connection_send(conn, arr.plist_ptr());
 }
 
+void BkConnection::send(int cmd, plist::object data, std::function<void(int, const plist::object &)> cb) {
+    uint64_t reqId = nextRequestId++;
+    callbacks.emplace(reqId, std::move(cb));
+    data.insert(0, (uint64_t) cmd);
+    sendRaw(BkEnvelopeType::MESSAGE, false, "R" + std::to_string(reqId), data);
+}
+
+void BkConnection::sendPing(std::function<void ()> cb) {
+    uint64_t reqId = nextRequestId++;
+    callbacks.emplace(reqId, std::bind(cb));
+    sendRaw(BkEnvelopeType::PING, false, "R" + std::to_string(reqId), plist::integer(0));
+}
+
 void BkConnection::onConnected() {
     printf("BkConnection::onConnected\n");
 }
@@ -46,6 +59,19 @@ void BkConnection::onMessage(plist::object const &msg) {
             throw std::runtime_error("got invalid message: ping can't be a reply");
         if (msgId != BK_NULL) {
             sendRaw(BkEnvelopeType::MESSAGE, true, msgId, plist::integer(1));
+        }
+    } else if (type == BkEnvelopeType::MESSAGE) {
+        if (isReply) {
+            if (msgId.length() < 2 || msgId[0] != 'R')
+                throw std::runtime_error("got invalid message: reply id must start with R");
+            auto cb = callbacks.find(std::strtol(&msgId[1], nullptr, 10));
+            if (cb == callbacks.end())
+                throw std::runtime_error("got invalid message: reply id not found");
+            int result = -1;
+            if (data.type() == PLIST_ARRAY && data.size() > 0)
+                result = (int) (uint64_t) data.at(0).get<uint64_t>();
+            cb->second(result, data);
+            callbacks.erase(cb);
         }
     }
 }
