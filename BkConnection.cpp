@@ -41,6 +41,8 @@ void BkConnection::sendPing(std::function<void ()> cb) {
 
 void BkConnection::onConnected() {
     printf("BkConnection::onConnected\n");
+    if (connectedCallback)
+        connectedCallback();
 }
 
 void BkConnection::onMessage(plist::object const &msg) {

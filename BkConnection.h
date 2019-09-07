@@ -32,12 +32,15 @@ enum class BkErrorCode {
 class BkConnection {
 
 public:
+    using ConnectedCallback = std::function<void ()>;
+
     using CompletionCallback = std::function<void (plist::object const &data)>;
 
     using ErrorCallback = std::function<void (BkErrorCode)>;
 
 private:
     struct bridge_xpc_connection *conn;
+    ConnectedCallback connectedCallback;
     std::unordered_map<uint64_t, CompletionCallback> callbacks;
     uint64_t nextRequestId = 0;
 
@@ -51,6 +54,8 @@ private:
 
 public:
     BkConnection(struct bridge_xpc_connection *conn);
+
+    void setConnectedCallback(ConnectedCallback cb) { connectedCallback = std::move(cb); }
 
     void send(BkCommand cmd, plist::object data, CompletionCallback cb);
 
