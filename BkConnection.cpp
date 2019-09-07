@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <cstring>
 #include "BkConnection.h"
 
 #define BK_NULL "d4161201-daf5-4bbd-ae4f-9bf319fabbe0"
@@ -25,7 +26,7 @@ void BkConnection::sendRaw(BkEnvelopeType type, bool isReply, std::string msgId,
     bridge_xpc_connection_send(conn, arr.plist_ptr());
 }
 
-void BkConnection::send(int cmd, plist::object data, std::function<void(int, const plist::object &)> cb) {
+void BkConnection::send(BkCommand cmd, plist::object data, CompletionCallback cb) {
     uint64_t reqId = nextRequestId++;
     callbacks.emplace(reqId, std::move(cb));
     data.insert(0, (uint64_t) cmd);
@@ -67,11 +68,60 @@ void BkConnection::onMessage(plist::object const &msg) {
             auto cb = callbacks.find(std::strtol(&msgId[1], nullptr, 10));
             if (cb == callbacks.end())
                 throw std::runtime_error("got invalid message: reply id not found");
-            int result = -1;
-            if (data.type() == PLIST_ARRAY && data.size() > 0)
-                result = (int) (uint64_t) data.at(0).get<uint64_t>();
-            cb->second(result, data);
+            cb->second(data);
             callbacks.erase(cb);
         }
     }
+}
+
+
+void BkConnection::getBridgeVersion(std::function<void (uint64_t version)> cb, ErrorCallback err) {
+    send(BkCommand::GetBridgeVersion, plist::array(), [cb, err](plist::object data) {
+        if (data.size() != 2)
+            err(BkErrorCode::InvalidValue);
+        else if (data.at(0).get<uint64_t>() != 0)
+            err((BkErrorCode) data.at(0).get<uint64_t>());
+        else
+            cb(data.at(1).get<uint64_t>());
+    });
+}
+
+void BkConnection::performCommand(void *data, size_t len, size_t replySize,
+        std::function<void(void *data, size_t len)> cb, BkConnection::ErrorCallback err) {
+    auto args = plist::array();
+    args.append(plist::integer(0));
+    args.append(plist::data(data, len));
+    args.append(plist::integer(replySize));
+    send(BkCommand::PerformCommand, args, [cb, err](plist::object data) {
+        if (data.size() != 2)
+            err(BkErrorCode::InvalidValue);
+        else if (data.at(0).get<uint64_t>() != 0)
+            err((BkErrorCode) data.at(0).get<uint64_t>());
+        else
+            cb(data.at(1).data_ptr(), data.at(0).size());
+    });
+}
+
+void BkConnection::getCalibrationData(BkCommand cmd, std::function<void(void *data, size_t len)> cb,
+        BkConnection::ErrorCallback err) {
+    send(cmd, plist::array(), [cb, err](plist::object data) {
+        if (data.size() != 1)
+            err(BkErrorCode::InvalidValue);
+        else if (data.at(0).type() == PLIST_STRING && !strcmp(data.at(0).get<const char *>(), BK_NULL))
+            cb(NULL, 0);
+        else if (data.at(0).type() != PLIST_DATA)
+            err(BkErrorCode::InvalidValue);
+        else
+            cb(data.at(0).data_ptr(), data.at(0).size());
+    });
+}
+
+void BkConnection::getCalibrationDataFromEEPROM(std::function<void(void *data, size_t len)> cb,
+        BkConnection::ErrorCallback err) {
+    getCalibrationData(BkCommand::GetCalibrationDataFromEEPROM, std::move(cb), std::move(err));
+}
+
+void BkConnection::getCalibrationDataFromFDR(std::function<void(void *data, size_t len)> cb,
+        BkConnection::ErrorCallback err) {
+    getCalibrationData(BkCommand::GetCalibrationDataFromFDR, std::move(cb), std::move(err));
 }

@@ -9,11 +9,32 @@ enum class BkEnvelopeType {
     PING = 0,
     MESSAGE = 1
 };
+enum class BkCommand {
+    GetBridgeVersion = 0,
+    GetServiceOpened = 1,
+    GetSystemBootTime = 2,
+    PerformCommand = 3,
+    SetIORegistryProperty = 4,
+    GetCalibrationDataFromEEPROM = 5,
+    MachContinousTime = 6,
+    GetMachTimebaseInfo = 7,
+    GetOSVersion = 8,
+    SetBridgeClientVersion = 10,
+    GetCalibrationDataFromFDR = 11
+};
+
+enum class BkErrorCode {
+    Success = 0,
+    // TODO: This isn't a real error, map real device errors?
+    InvalidValue = -1
+};
 
 class BkConnection {
 
 public:
-    using CompletionCallback = std::function<void (int status, plist::object const &data)>;
+    using CompletionCallback = std::function<void (plist::object const &data)>;
+
+    using ErrorCallback = std::function<void (BkErrorCode)>;
 
 private:
     struct bridge_xpc_connection *conn;
@@ -26,11 +47,23 @@ private:
 
     void sendRaw(BkEnvelopeType type, bool isReply, std::string msgId, plist::object data);
 
+    void getCalibrationData(BkCommand cmd, std::function<void (void *data, size_t len)> cb, ErrorCallback err);
+
 public:
     BkConnection(struct bridge_xpc_connection *conn);
 
-    void send(int cmd, plist::object data, CompletionCallback cb);
+    void send(BkCommand cmd, plist::object data, CompletionCallback cb);
 
     void sendPing(std::function<void ()> cb);
+
+
+    void getBridgeVersion(std::function<void (uint64_t version)> cb, ErrorCallback err);
+
+    void performCommand(void *data, size_t len, size_t replySize,
+            std::function<void (void *data, size_t len)> cb, ErrorCallback err);
+
+    void getCalibrationDataFromEEPROM(std::function<void (void *data, size_t len)> cb, ErrorCallback err);
+
+    void getCalibrationDataFromFDR(std::function<void (void *data, size_t len)> cb, ErrorCallback err);
 
 };
