@@ -1,3 +1,6 @@
 [submodule "libbridgexpc"]
 	path = libbridgexpc
 	url = https://github.com/MCMrARM/libbridgexpc.git
+[submodule "libplistpp2"]
+	path = libplistpp2
+	url = https://github.com/MCMrARM/libplistpp2.git
