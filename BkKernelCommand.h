@@ -79,12 +79,34 @@ struct BkKernelCommandHeader {
 };
 static_assert(sizeof(BkKernelCommandHeader) == 8, "bad kernel command header size");
 
+#define BK_KERNEL_BIOMETRICKITD_INFO_SIZE 23
 struct BkKernelBiometricKitdInfo {
     uint32_t maxTemplatesPerUser;
     uint32_t maxUsers;
-    char filler[23 - 8];
+    char filler[BK_KERNEL_BIOMETRICKITD_INFO_SIZE - 8];
 };
 
+struct BkKernelCatacombStateEntry {
+    uint32_t userId;
+    uint32_t unknown;
+};
+
+struct BkKernelAuthOptions {
+    uint32_t isAuthToken; // CredentialSet otherwise
+    uint32_t dataLength;
+    char data[32];
+};
+struct BkKernelEnrollOptions {
+    static constexpr uint32_t FLAG_IS_PURPLE_BUDDY = 1;
+    uint32_t flags;
+    uint32_t userId;
+    BkKernelAuthOptions auth;
+};
+enum class BkKernelCalibrationDataSource : uint16_t {
+    FDR = 3
+};
+
+static_assert(sizeof(BkKernelEnrollOptions) == 48, "bad enroll command size");
 
 struct BkKernelCommandExecutor {
 
@@ -92,22 +114,22 @@ private:
     using ErrorCallback = BkConnection::ErrorCallback;
 
     BkConnection &conn;
-    unsigned int maxTemplatesPerUser;
-    unsigned int maxUsers;
+    unsigned int maxTemplatesPerUser = 0;
+    unsigned int maxUsers = 0;
 
-    static BkKernelCommandHeader buildHeader(BkKernelCommandId cmdId) {
+    static BkKernelCommandHeader buildHeader(BkKernelCommandId cmdId, uint16_t inValue = 0) {
         BkKernelCommandHeader header;
         header.magic = BK_KERNEL_COMMAND_MAGIC;
         header.version = BK_KERNEL_COMMAND_VERSION;
         header.cmdId = cmdId;
-        header.inValue = 0;
+        header.inValue = inValue;
         return header;
     }
 
 public:
     BkKernelCommandExecutor(BkConnection &conn) : conn(conn) {}
 
-    size_t getCommProtocolVersion(std::function<void (int)> cb, ErrorCallback err) {
+    void getCommProtocolVersion(std::function<void (int)> cb, ErrorCallback err) {
         struct {
             BkKernelCommandHeader header = buildHeader(BkKernelCommandId::GetCommProtocolVersion);
             uint32_t inVer = 1;
@@ -117,9 +139,46 @@ public:
         }, err);
     }
 
-    void setCalibrationData(void *data, size_t dataSize, std::function<void ()> cb, ErrorCallback err) {
+    void resetSensor(std::function<void ()> cb, ErrorCallback err) {
+        BkKernelCommandHeader header = buildHeader(BkKernelCommandId::ResetSensor);
+        conn.performCommand(&header, sizeof(header), 0, std::bind(cb), err);
+    }
+
+    void startEnroll(BkKernelEnrollOptions opts, std::function<void ()> cb, ErrorCallback err) {
+        struct {
+            BkKernelCommandHeader header = buildHeader(BkKernelCommandId::StartEnroll, 1);
+            BkKernelEnrollOptions eopts;
+        } data;
+        data.eopts = opts;
+        conn.performCommand(&data, sizeof(data), 0, std::bind(cb), err);
+    }
+
+    void getTemplateListSU(std::function<void (void *data, size_t len)> cb, ErrorCallback err) {
+        BkKernelCommandHeader header = buildHeader(BkKernelCommandId::GetTemplateListSUSize);
+        conn.performCommand(&header, sizeof(header), sizeof(uint32_t), [this, cb, err](void *data, size_t len) {
+            uint32_t size = *(uint32_t*) data;
+            BkKernelCommandHeader header = buildHeader(BkKernelCommandId::GetTemplateListSU);
+            conn.performCommand(&header, sizeof(header), size, [this, cb](void *data, size_t len) {
+                cb(data, len);
+            }, err);
+        }, err);
+    }
+
+    void getCaptureBuffer(std::function<void (void *data, size_t len)> cb, ErrorCallback err) {
+        BkKernelCommandHeader header = buildHeader(BkKernelCommandId::GetCaptureBuffer);
+        conn.performCommand(&header, sizeof(header), 0x8000, std::move(cb), std::move(err));
+    }
+
+    void getDebugImageData(bool second, std::function<void (void *data, size_t len)> cb, ErrorCallback err) {
+        BkKernelCommandHeader header = buildHeader(
+                second ? BkKernelCommandId::GetDebugImageData2 : BkKernelCommandId::GetDebugImageData);
+        conn.performCommand(&header, sizeof(header), 0x5400, std::move(cb), std::move(err));
+    }
+
+    void setCalibrationData(BkKernelCalibrationDataSource source, void *data, size_t dataSize,
+            std::function<void ()> cb, ErrorCallback err) {
         uint8_t *cmdData = new uint8_t[sizeof(BkKernelCommandHeader) + dataSize];
-        *((BkKernelCommandHeader *) cmdData) = buildHeader(BkKernelCommandId::SetCalibrationData);
+        *((BkKernelCommandHeader *) cmdData) = buildHeader(BkKernelCommandId::SetCalibrationData, (uint16_t) source);
         memcpy(&cmdData[sizeof(BkKernelCommandHeader)], data, dataSize);
         conn.performCommand(cmdData, sizeof(BkKernelCommandHeader) + dataSize, 0, std::bind(cb), err);
         delete[] cmdData;
@@ -127,7 +186,7 @@ public:
 
     void getBiometricKitdInfo(std::function<void (BkKernelBiometricKitdInfo&)> cb, ErrorCallback err) {
         BkKernelCommandHeader header = buildHeader(BkKernelCommandId::GetBiometricKitdInfo);
-        conn.performCommand(&header, sizeof(header), 23,
+        conn.performCommand(&header, sizeof(header), BK_KERNEL_BIOMETRICKITD_INFO_SIZE,
                 [this, cb](void *data, size_t len) {
                     auto info = (BkKernelBiometricKitdInfo *) data;
                     maxTemplatesPerUser = info->maxTemplatesPerUser;
@@ -135,5 +194,18 @@ public:
                     cb(*info);
                 }, err);
     }
+
+    void getCatacombState(std::function<void (BkKernelCatacombStateEntry *, size_t)> cb, ErrorCallback err) {
+        size_t entryCount = maxUsers;
+        if (!entryCount)
+            throw std::runtime_error("getCatacombState can only be called after getBiometricKitdInfo is finished");
+        BkKernelCommandHeader header = buildHeader(BkKernelCommandId::GetCatacombState);
+        conn.performCommand(&header, sizeof(header), sizeof(BkKernelCatacombStateEntry) * entryCount,
+                [cb, entryCount](void *data, size_t len) {
+                    cb((BkKernelCatacombStateEntry *) data, len / sizeof(BkKernelCatacombStateEntry));
+                }, err);
+    }
+
+
 
 };
