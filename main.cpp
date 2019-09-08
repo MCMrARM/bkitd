@@ -30,18 +30,21 @@ int main(int argn, const char **argv) {
         bkKCE.getCommProtocolVersion([](int v) {
             printf("bkitd: remote comm protocol version: %i\n", v);
         }, nullptr);
-        bkKCE.getBiometricKitdInfo([](BkKernelBiometricKitdInfo &kd) {
+
+        bkKCE.getBiometricKitdInfo([bkConn, &bkKCE](BkKernelBiometricKitdInfo &kd) {
             printf("bkitd: remote max templates per user: %u\n", kd.maxTemplatesPerUser);
             printf("bkitd: remote max users: %u\n", kd.maxUsers);
+            bkKCE.getCatacombState([](BkKernelCatacombStateEntry *ent, size_t cnt) {
+                for (size_t i = 0; i < cnt; i++)
+                    printf("bkitd: remote catacomb: #%li userId=%i unknown=%i\n", i, ent[i].userId, ent[i].unknown);
+            }, nullptr);
         }, nullptr);
 
-        /*
         bkConn->getCalibrationDataFromFDR([&bkKCE](void *data, size_t len) {
-            bkKCE.setCalibrationData(data, len, []() {
+            bkKCE.setCalibrationData(BkKernelCalibrationDataSource::FDR, data, len, []() {
                 printf("bkitd: loaded calibration data\n");
             }, nullptr);
         }, nullptr);
-         */
     });
 
     if (bufferevent_socket_connect_hostname(conn->bev, evdns, AF_UNSPEC, argv[1], atoi(argv[2]))) {
