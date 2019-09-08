@@ -99,8 +99,12 @@ void BkConnection::performCommand(void *data, size_t len, size_t replySize,
             err(BkErrorCode::InvalidValue);
         else if (data.at(0).get<uint64_t>() != 0)
             err((BkErrorCode) data.at(0).get<uint64_t>());
+        else if (data.at(1).type() == PLIST_STRING && !strcmp(data.at(1).get<const char *>(), BK_NULL))
+            cb(NULL, 0);
+        else if (data.at(1).type() != PLIST_DATA)
+            err(BkErrorCode::InvalidValue);
         else
-            cb(data.at(1).data_ptr(), data.at(0).size());
+            cb(data.at(1).data_ptr(), data.at(1).size());
     });
 }
 
