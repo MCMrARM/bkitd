@@ -34,7 +34,7 @@ enum class BkKernelCommandId : uint16_t {
     GetSensorCalibrationStatus = 0x1D,
     GetUserSerializedTemplateListSize = 0x1F,
     SetCalibrationData = 0x20,
-    GetModuleSerialCount = 0x22,
+    GetModuleSerialNumber = 0x22,
     PullMatchPolicyInfoData = 0x23,
     LoadCustomPatch = 0x24,
     StartDetectFinger = 0x26,
@@ -48,7 +48,7 @@ enum class BkKernelCommandId : uint16_t {
     GetProtectedConfiguration = 0x2E,
     SetProtectedConfiguration = 0x2F,
     GetEnabledForUnlock = 0x30,
-    // ReportError = 0x31 ?
+    Unknown0x31 = 0x31,
     HasIdentity = 0x32,
     GetTimestampCollection = 0x33,
     ResetAppleConnectCounter = 0x34,
@@ -57,6 +57,9 @@ enum class BkKernelCommandId : uint16_t {
     DropUnlockToken = 0x39,
     GetIdentityHash = 0x3A,
     GetCatacombState = 0x3C,
+    GetUserSecureDataLength = 0x3D,
+    GetUserSecureData = 0x3E,
+    BumpUserSecureDataCounter = 0x3F,
     SetUserSecureData = 0x40,
     GetFreeIdentityCount = 0x41,
     GetUserTemplateList = 0x42,
@@ -101,6 +104,24 @@ struct BkKernelEnrollOptions {
     uint32_t flags;
     uint32_t userId;
     BkKernelAuthOptions auth;
+};
+struct BkKernelProtectedConfig {
+    uint touchIdUnlockEnabled;
+    uint touchIdIdentificationEnabled;
+    uint touchIdLoginEnabled;
+    uint touchIdApplePayEnabled;
+    uint effectiveTouchIdUnlockEnabled;
+    uint effectiveTouchIdIdentificationEnabled;
+    uint effectiveTouchIdLoginEnabled;
+    uint effectiveTouchIdApplePayEnabled;
+};
+struct BkKernelSystemProtectedConfig {
+    int touchIdUnlockTokenMaxLifetime; // > 0
+    int pad[2];
+    uint touchIdEnabled;
+    uint touchIdUnlockEnabled;
+    uint touchIdIdentificationEnabled;
+    uint touchIdLoginEnabled;
 };
 enum class BkKernelCalibrationDataSource : uint16_t {
     FDR = 3
@@ -164,6 +185,14 @@ public:
         }, err);
     }
 
+    void setTemplateListSU(void *data, size_t dataSize, std::function<void ()> cb, ErrorCallback err) {
+        uint8_t *cmdData = new uint8_t[sizeof(BkKernelCommandHeader) + dataSize];
+        *((BkKernelCommandHeader *) cmdData) = buildHeader(BkKernelCommandId::SetTemplateListSU);
+        memcpy(&cmdData[sizeof(BkKernelCommandHeader)], data, dataSize);
+        conn.performCommand(cmdData, sizeof(BkKernelCommandHeader) + dataSize, 0, std::bind(cb), err);
+        delete[] cmdData;
+    }
+
     void getCaptureBuffer(std::function<void (void *data, size_t len)> cb, ErrorCallback err) {
         BkKernelCommandHeader header = buildHeader(BkKernelCommandId::GetCaptureBuffer);
         conn.performCommand(&header, sizeof(header), 0x8000, std::move(cb), std::move(err));
@@ -175,6 +204,23 @@ public:
         conn.performCommand(&header, sizeof(header), 0x5400, std::move(cb), std::move(err));
     }
 
+    void cancel(std::function<void ()> cb, ErrorCallback err) {
+        BkKernelCommandHeader header = buildHeader(BkKernelCommandId::Cancel);
+        conn.performCommand(&header, sizeof(header), 0, std::bind(cb), err);
+    }
+
+    void getMaxIdentityCount(std::function<void (uint32_t)> cb, ErrorCallback err) {
+        BkKernelCommandHeader header = buildHeader(BkKernelCommandId::GetMaxIdentityCount);
+        conn.performCommand(&header, sizeof(header), sizeof(uint32_t), [cb](void *data, size_t len) {
+            cb(*(uint32_t *) data);
+        }, std::move(err));
+    }
+
+    void notifyDisplayPowerChanged(bool displayOn, std::function<void ()> cb, ErrorCallback err) {
+        BkKernelCommandHeader header = buildHeader(BkKernelCommandId::NotifyDisplayPowerChanged, displayOn ? 1 : 0);
+        conn.performCommand(&header, sizeof(header), 0, std::bind(cb), err);
+    }
+
     void setCalibrationData(BkKernelCalibrationDataSource source, void *data, size_t dataSize,
             std::function<void ()> cb, ErrorCallback err) {
         uint8_t *cmdData = new uint8_t[sizeof(BkKernelCommandHeader) + dataSize];
@@ -182,6 +228,17 @@ public:
         memcpy(&cmdData[sizeof(BkKernelCommandHeader)], data, dataSize);
         conn.performCommand(cmdData, sizeof(BkKernelCommandHeader) + dataSize, 0, std::bind(cb), err);
         delete[] cmdData;
+    }
+
+    void getSKSLockState(int userId, std::function<void (uint32_t)> cb, ErrorCallback err) {
+        struct {
+            BkKernelCommandHeader header = buildHeader(BkKernelCommandId::GetSKSLockState);
+            int userId;
+        } data;
+        data.userId = userId;
+        conn.performCommand(&data, sizeof(data), sizeof(uint32_t), [cb](void *data, size_t len) {
+            cb(*((uint32_t *) data));
+        }, err);
     }
 
     void getBiometricKitdInfo(std::function<void (BkKernelBiometricKitdInfo&)> cb, ErrorCallback err) {
@@ -195,6 +252,45 @@ public:
                 }, err);
     }
 
+    void getLoggingType(std::function<void (uint8_t)> cb, ErrorCallback err) {
+        BkKernelCommandHeader header = buildHeader(BkKernelCommandId::GetLoggingType);
+        conn.performCommand(&header, sizeof(header), sizeof(uint8_t), [cb](void *data, size_t len) {
+            cb(*((uint8_t *) data));
+        }, std::move(err));
+    }
+
+    void setBioLogState(int state, std::function<void ()> cb, ErrorCallback err) {
+        BkKernelCommandHeader header = buildHeader(BkKernelCommandId::SetBioLogState, state);
+        conn.performCommand(&header, sizeof(header), 0, std::bind(cb), std::move(err));
+    }
+
+    void getProtectedConfiguration(int userId, std::function<void (BkKernelProtectedConfig&)> cb, ErrorCallback err) {
+        struct {
+            BkKernelCommandHeader header = buildHeader(BkKernelCommandId::GetProtectedConfiguration);
+            int userId;
+        } data;
+        data.userId = userId;
+        conn.performCommand(&data, sizeof(data), sizeof(BkKernelProtectedConfig), [cb](void *data, size_t len) {
+            cb(*((BkKernelProtectedConfig *) data));
+        }, err);
+    }
+
+    void getEnabledForUnlock(std::function<void (bool)> cb, ErrorCallback err) {
+        BkKernelCommandHeader header = buildHeader(BkKernelCommandId::GetEnabledForUnlock);
+        conn.performCommand(&header, sizeof(header), sizeof(uint8_t), [cb](void *data, size_t len) {
+            cb((*(uint8_t *) data) != 0);
+        }, std::move(err));
+    }
+
+    void call0x31(int userId, std::function<void ()> cb, ErrorCallback err) {
+        struct {
+            BkKernelCommandHeader header = buildHeader(BkKernelCommandId::Unknown0x31);
+            int userId;
+        } data;
+        data.userId = userId;
+        conn.performCommand(&data, sizeof(data), 0, std::bind(cb), err);
+    }
+
     void getCatacombState(std::function<void (BkKernelCatacombStateEntry *, size_t)> cb, ErrorCallback err) {
         size_t entryCount = maxUsers;
         if (!entryCount)
@@ -204,6 +300,32 @@ public:
                 [cb, entryCount](void *data, size_t len) {
                     cb((BkKernelCatacombStateEntry *) data, len / sizeof(BkKernelCatacombStateEntry));
                 }, err);
+    }
+
+    void getFreeIdentityCount(int userId, std::function<void (int)> cb, ErrorCallback err) {
+        struct {
+            BkKernelCommandHeader header = buildHeader(BkKernelCommandId::GetFreeIdentityCount);
+            int userId;
+        } data;
+        data.userId = userId;
+        conn.performCommand(&data, sizeof(data), sizeof(int), [cb](void *data, size_t len) {
+            cb(*((int *) data));
+        }, err);
+    }
+
+    void getSystemProtectedConfiguration(std::function<void (BkKernelSystemProtectedConfig&)> cb, ErrorCallback err) {
+        BkKernelCommandHeader header = buildHeader(BkKernelCommandId::GetSystemProtectedConfiguration);
+        conn.performCommand(&header, sizeof(header), sizeof(BkKernelSystemProtectedConfig),
+                [cb](void *data, size_t len) {
+                    cb(*((BkKernelSystemProtectedConfig *) data));
+                }, err);
+    }
+
+    void isXartAvailable(std::function<void (bool)> cb, ErrorCallback err) {
+        BkKernelCommandHeader header = buildHeader(BkKernelCommandId::IsXartAvailable);
+        conn.performCommand(&header, sizeof(header), sizeof(uint8_t), [cb](void *data, size_t len) {
+            cb(*((uint8_t *) data) != 0);
+        }, std::move(err));
     }
 
 
